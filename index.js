@@ -107,17 +107,24 @@ const PreviewContainer = {
   element: null,
   
   /**
-   * Create a new preview container or reset the existing one
+   * Create a new preview container or reuse the existing one
    * @returns {HTMLElement} The preview container
    */
   create: function() {
-    // Remove any existing containers first
-    this.removeAll();
+    // Check if we already have a container with this ID
+    const existingContainer = document.getElementById('image-preview-container');
     
-    // Create a new container
-    this.element = document.createElement('div');
-    this.element.id = 'image-preview-container';
-    document.body.appendChild(this.element);
+    if (existingContainer) {
+      // Reuse the existing container but clear its contents
+      existingContainer.innerHTML = '';
+      existingContainer.className = '';
+      this.element = existingContainer;
+    } else {
+      // Create a new container only if needed
+      this.element = document.createElement('div');
+      this.element.id = 'image-preview-container';
+      document.body.appendChild(this.element);
+    }
     
     return this.element;
   },
@@ -131,41 +138,11 @@ const PreviewContainer = {
     this.element.innerHTML = '';
     this.element.className = 'loading';
     
-    const loadingText = document.createElement('div');
-    loadingText.className = 'loading-text';
-    loadingText.textContent = 'Loading...';
-    this.element.appendChild(loadingText);
+    // Make sure the container is positioned at the top of the stacking order
+    this.element.style.zIndex = '10000';
     
     // Force a reflow to ensure the loading state is visible
     void this.element.offsetWidth;
-  },
-  
-  /**
-   * Show an image in the container
-   * @param {HTMLImageElement} img - The image element to show
-   * @param {Object} options - Additional options
-   */
-  showImage: function(img, options = {}) {
-    if (!this.element) this.create();
-    
-    // Remove loading state
-    const loadingElements = this.element.querySelectorAll('.loading-text');
-    loadingElements.forEach(el => el.remove());
-    
-    // Clear any existing content and reset class
-    this.element.innerHTML = '';
-    this.element.classList.remove('loading');
-    
-    // Add cache-related attributes if needed
-    if (options.fromCache) {
-      img.classList.add('from-cache');
-      if (options.cacheHit) {
-        img.setAttribute('title', `From cache (Hit #${options.cacheHit})`);
-      }
-    }
-    
-    // Add the image to the container
-    // this.element.appendChild(img);
   },
   
   /**
@@ -190,6 +167,10 @@ const PreviewContainer = {
    */
   positionAtCursor: function(event) {
     if (!this.element) return;
+    
+    // Store the initial position to ensure we always use the same container
+    this.lastEventX = event.pageX;
+    this.lastEventY = event.pageY;
     
     this.element.style.top = `${event.pageY + 20}px`;
     this.element.style.left = `${event.pageX + 20}px`;
@@ -250,11 +231,16 @@ const PreviewContainer = {
 function showPreview(event, imageUrl) {
   debugLog(`Showing preview for: ${imageUrl}`);
   
+  // Cancel any previous image loads
+  hideAllImageLoads();
+  
   // Track the current image URL being loaded
   currentImageUrl = imageUrl;
   
-  // Create container and show loading state
+  // Create a brand new container with a tracking ID
   PreviewContainer.create();
+  
+  // Show loading state and position the container
   PreviewContainer.showLoading();
   PreviewContainer.positionAtCursor(event);
   
@@ -271,24 +257,6 @@ function showPreview(event, imageUrl) {
     
     // Create a new image element
     const cachedImg = new Image();
-    
-    // IMPORTANT: Set up the onload handler BEFORE setting src
-    cachedImg.onload = () => {
-      // Make sure this is still the current image we want to display
-      if (imageUrl !== currentImageUrl) return;
-      
-      // Show the cached image
-      PreviewContainer.showImage(cachedImg, {
-        fromCache: true,
-        cacheHit: cacheHits
-      });
-      
-      // Adjust position
-      PreviewContainer.adjustPosition(event);
-      
-      // Log performance gain
-      debugLog(`Cache performance gain: ~${cachedData.loadTime}ms`);
-    };
     
     // Set the source to trigger loading from browser cache
     cachedImg.src = cachedData.src;
@@ -307,15 +275,8 @@ function showPreview(event, imageUrl) {
     // Make sure this is still the current image we want to display
     if (imageUrl !== currentImageUrl) return;
     
-    // Performance monitoring
-    const loadTime = Date.now() - previewStartTime;
-    infoLog(`✅ Image loaded: ${imageUrl} (${loadTime}ms)`);
-    
-    // Show the image
-    PreviewContainer.showImage(img);
-    
-    // Adjust position
-    PreviewContainer.adjustPosition(event);
+    // Remove loading class
+    PreviewContainer.element.classList.remove('loading');
     
     // Cache the image data
     imageCache.set(imageUrl, {
@@ -324,7 +285,7 @@ function showPreview(event, imageUrl) {
       timestamp: Date.now()
     });
     
-    debugLog(`Added to cache: ${imageUrl}. Cache size: ${imageCache.size}`);
+    // debugLog(`Added to cache: ${imageUrl}. Cache size: ${imageCache.size}`);
   };
 
   // When the image fails to load:
@@ -347,6 +308,14 @@ function showPreview(event, imageUrl) {
   
   // Set source to start loading
   img.src = imageUrl;
+}
+
+/**
+ * Cancels all pending image loads to prevent race conditions
+ */
+function hideAllImageLoads() {
+  // Reset tracking variables to cancel any pending image loads
+  currentImageUrl = null;
 }
 
 /**
@@ -381,6 +350,9 @@ document.addEventListener('mouseover', (event) => {
         return;
       }
       
+      // Always hide any existing preview before showing a new one
+      hidePreview();
+      
       // Update tracking variables
       lastHoveredLink = link;
       lastHoveredUrl = imageUrl;
@@ -389,7 +361,12 @@ document.addEventListener('mouseover', (event) => {
       clearTimeout(hoverTimeout);
       
       // Use a shorter delay for responsiveness
-      hoverTimeout = setTimeout(() => showPreview(event, imageUrl), 100);
+      hoverTimeout = setTimeout(() => {
+        // Make sure we're not trying to show multiple previews
+        if (imageUrl !== lastHoveredUrl) return;
+        
+        showPreview(event, imageUrl);
+      }, 100);
       
       // When the mouse leaves the link, hide the preview
       link.addEventListener('mouseout', () => {
