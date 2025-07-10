@@ -71,8 +71,8 @@ const CACHE_SIZE_LIMIT = 50;
 // Cache hit counter for statistics
 let cacheHits = 0;
 
-let previewContainer;
-let hoverTimeout;
+// Global variables for tracking state
+let hoverTimeout = null;
 let currentImageUrl = null;
 
 /**
@@ -100,93 +100,166 @@ function getImageUrl(anchor) {
 }
 
 /**
+ * Module for managing the preview container
+ */
+const PreviewContainer = {
+  // Reference to the current container
+  element: null,
+  
+  /**
+   * Create a new preview container or reset the existing one
+   * @returns {HTMLElement} The preview container
+   */
+  create: function() {
+    // Remove any existing containers first
+    this.removeAll();
+    
+    // Create a new container
+    this.element = document.createElement('div');
+    this.element.id = 'image-preview-container';
+    document.body.appendChild(this.element);
+    
+    return this.element;
+  },
+  
+  /**
+   * Show the loading state in the container
+   */
+  showLoading: function() {
+    if (!this.element) this.create();
+    
+    this.element.innerHTML = '';
+    this.element.className = 'loading';
+    
+    const loadingText = document.createElement('div');
+    loadingText.className = 'loading-text';
+    loadingText.textContent = 'Loading...';
+    this.element.appendChild(loadingText);
+    
+    // Force a reflow to ensure the loading state is visible
+    void this.element.offsetWidth;
+  },
+  
+  /**
+   * Show an image in the container
+   * @param {HTMLImageElement} img - The image element to show
+   * @param {Object} options - Additional options
+   */
+  showImage: function(img, options = {}) {
+    if (!this.element) this.create();
+    
+    // Remove loading state
+    const loadingElements = this.element.querySelectorAll('.loading-text');
+    loadingElements.forEach(el => el.remove());
+    
+    // Clear any existing content and reset class
+    this.element.innerHTML = '';
+    this.element.classList.remove('loading');
+    
+    // Add cache-related attributes if needed
+    if (options.fromCache) {
+      img.classList.add('from-cache');
+      if (options.cacheHit) {
+        img.setAttribute('title', `From cache (Hit #${options.cacheHit})`);
+      }
+    }
+    
+    // Add the image to the container
+    // this.element.appendChild(img);
+  },
+  
+  /**
+   * Show an error message in the container
+   * @param {string} message - The error message to show
+   */
+  showError: function(message = 'Failed to load image') {
+    if (!this.element) this.create();
+    
+    this.element.innerHTML = '';
+    this.element.className = 'error';
+    
+    const errorMsg = document.createElement('div');
+    errorMsg.className = 'error-message';
+    errorMsg.textContent = message;
+    this.element.appendChild(errorMsg);
+  },
+  
+  /**
+   * Position the container near the cursor
+   * @param {MouseEvent} event - The mouse event
+   */
+  positionAtCursor: function(event) {
+    if (!this.element) return;
+    
+    this.element.style.top = `${event.pageY + 20}px`;
+    this.element.style.left = `${event.pageX + 20}px`;
+  },
+  
+  /**
+   * Adjust the position to prevent going off-screen
+   * @param {MouseEvent} event - The original mouse event
+   */
+  adjustPosition: function(event) {
+    if (!this.element) return;
+    
+    let top = event.pageY + 20;
+    let left = event.pageX + 20;
+
+    if (left + this.element.offsetWidth > window.innerWidth + window.scrollX) {
+      left = event.pageX - this.element.offsetWidth - 20;
+    }
+    if (top + this.element.offsetHeight > window.innerHeight + window.scrollY) {
+      top = event.pageY - this.element.offsetHeight - 20;
+    }
+    
+    this.element.style.top = `${top}px`;
+    this.element.style.left = `${left}px`;
+  },
+  
+  /**
+   * Remove the current container
+   */
+  remove: function() {
+    if (this.element) {
+      this.element.remove();
+      this.element = null;
+    }
+  },
+  
+  /**
+   * Remove all preview containers from the page
+   */
+  removeAll: function() {
+    // Remove by ID
+    const containers = document.querySelectorAll('#image-preview-container');
+    containers.forEach(container => container.remove());
+    
+    // Also remove any with the old class name (for backward compatibility)
+    const oldContainers = document.querySelectorAll('.image-preview-container');
+    oldContainers.forEach(container => container.remove());
+    
+    this.element = null;
+  }
+};
+
+/**
  * Creates and displays the image preview near the cursor.
  * @param {MouseEvent} event - The mouse event.
  * @param {string} imageUrl - The URL of the image to preview.
  */
 function showPreview(event, imageUrl) {
-  debugLog(`Showing loading indicator for: ${imageUrl}`);
-  
-  // Ensure any existing preview is completely removed
-  hideAllPreviews();
+  debugLog(`Showing preview for: ${imageUrl}`);
   
   // Track the current image URL being loaded
   currentImageUrl = imageUrl;
   
-  // Create and show the container immediately with a loading state
-  previewContainer = document.createElement('div');
-  previewContainer.id = 'image-preview-container'; // Use a fixed ID for easier cleanup
-  previewContainer.classList.add('loading');
+  // Create container and show loading state
+  PreviewContainer.create();
+  PreviewContainer.showLoading();
+  PreviewContainer.positionAtCursor(event);
   
-  // Add a loading text to make it more visible
-  const loadingText = document.createElement('div');
-  loadingText.className = 'loading-text';
-  loadingText.textContent = 'Loading...';
-  previewContainer.appendChild(loadingText);
-  
-  // Add to DOM
-  document.body.appendChild(previewContainer);
-  
-  // Force a reflow to ensure the loading state is visible
-  void previewContainer.offsetWidth;
-  
-  // Set initial position near the cursor
-  previewContainer.style.top = `${event.pageY + 20}px`;
-  previewContainer.style.left = `${event.pageX + 20}px`;
-  
-  const img = document.createElement('img');
-
-  // Helper to adjust the final position to prevent going off-screen.
-  const adjustPosition = () => {
-    let top = event.pageY + 20;
-    let left = event.pageX + 20;
-
-    if (left + previewContainer.offsetWidth > window.innerWidth + window.scrollX) {
-      left = event.pageX - previewContainer.offsetWidth - 20;
-    }
-    if (top + previewContainer.offsetHeight > window.innerHeight + window.scrollY) {
-      top = event.pageY - previewContainer.offsetHeight - 20;
-    }
-    previewContainer.style.top = `${top}px`;
-    previewContainer.style.left = `${left}px`;
-  };
-
-  // When the image loads successfully:
-  img.onload = () => {
-    // Make sure this is still the current image we want to display
-    if (imageUrl !== currentImageUrl || !previewContainer) return;
-    
-    // Performance monitoring
-    const loadTime = Date.now() - previewStartTime;
-    infoLog(`✅ Image loaded: ${imageUrl} (${loadTime}ms)`);
-    
-    // Transform the loading container into the image container
-    // This is more efficient than creating a new container
-    previewContainer.innerHTML = '';
-    previewContainer.classList.remove('loading');
-    previewContainer.appendChild(img);
-    
-    // Adjust position after the image is added
-    adjustPosition();
-  };
-
-  // When the image fails to load:
-  img.onerror = () => {
-    // Make sure this is still the current image we want to display
-    if (imageUrl !== currentImageUrl || !previewContainer) return;
-    
-    if (DEBUG) infoLog(`❌ ERROR: Image failed to load: ${imageUrl}`);
-    
-    // Update container with error message
-    previewContainer.classList.remove('loading');
-    previewContainer.classList.add('error');
-    previewContainer.innerHTML = `<div class="error-content"><span class="error-icon">❌</span> <span class="error-text">Image failed to load</span></div>`;
-    adjustPosition();
-  };
-
-  // For performance monitoring
+  // Start performance monitoring
   const previewStartTime = Date.now();
-  debugLog(`[Preview] Starting to load image at: ${previewStartTime}`);
   
   // Check if the image is already in the cache - fast path
   if (imageCache.has(imageUrl)) {
@@ -196,23 +269,22 @@ function showPreview(event, imageUrl) {
     // Get cached data
     const cachedData = imageCache.get(imageUrl);
     
-    // Use the existing loading container to display the cached image
-    // This avoids creating a new container
+    // Create a new image element
     const cachedImg = new Image();
     
-    // When the cached image is ready
+    // IMPORTANT: Set up the onload handler BEFORE setting src
     cachedImg.onload = () => {
-      // Clear loading content and show image
-      previewContainer.innerHTML = '';
-      previewContainer.classList.remove('loading');
-      previewContainer.appendChild(cachedImg);
+      // Make sure this is still the current image we want to display
+      if (imageUrl !== currentImageUrl) return;
       
-      // Mark as from cache
-      cachedImg.classList.add('from-cache');
-      cachedImg.setAttribute('title', `From cache (Hit #${cacheHits})`);
+      // Show the cached image
+      PreviewContainer.showImage(cachedImg, {
+        fromCache: true,
+        cacheHit: cacheHits
+      });
       
       // Adjust position
-      adjustPosition();
+      PreviewContainer.adjustPosition(event);
       
       // Log performance gain
       debugLog(`Cache performance gain: ~${cachedData.loadTime}ms`);
@@ -227,20 +299,25 @@ function showPreview(event, imageUrl) {
   // Not in cache, load normally
   infoLog(`📥 CACHE MISS: ${imageUrl}`);
   
-  // Only set crossOrigin if needed (for cross-origin images)
-  if (imageUrl.startsWith('http') && !imageUrl.includes(window.location.hostname)) {
-    img.crossOrigin = 'anonymous';
-  }
+  // Create new image element
+  const img = new Image();
   
-  // Set source to start loading
-  img.src = imageUrl;
-  
-  // Add to cache when loaded
-  img.addEventListener('load', () => {
-    // Cache the image data
-    const loadTime = Date.now() - previewStartTime;
+  // When the image loads successfully:
+  img.onload = () => {
+    // Make sure this is still the current image we want to display
+    if (imageUrl !== currentImageUrl) return;
     
-    // Store in cache with minimal data
+    // Performance monitoring
+    const loadTime = Date.now() - previewStartTime;
+    infoLog(`✅ Image loaded: ${imageUrl} (${loadTime}ms)`);
+    
+    // Show the image
+    PreviewContainer.showImage(img);
+    
+    // Adjust position
+    PreviewContainer.adjustPosition(event);
+    
+    // Cache the image data
     imageCache.set(imageUrl, {
       src: imageUrl,
       loadTime: loadTime,
@@ -248,25 +325,41 @@ function showPreview(event, imageUrl) {
     });
     
     debugLog(`Added to cache: ${imageUrl}. Cache size: ${imageCache.size}`);
-  }, { once: true });
+  };
+
+  // When the image fails to load:
+  img.onerror = () => {
+    if (imageUrl !== currentImageUrl) return;
+    
+    infoLog(`❌ Failed to load image: ${imageUrl}`);
+    
+    // Show error state
+    PreviewContainer.showError('Failed to load image');
+    
+    // Adjust position for the error message
+    PreviewContainer.adjustPosition(event);
+  };
+  
+  // Only set crossOrigin if needed (for cross-origin images)
+  if (imageUrl.startsWith('http') && !imageUrl.includes(window.location.hostname)) {
+    img.crossOrigin = 'anonymous';
+  }
+  
+  // Set source to start loading
+  img.src = imageUrl;
 }
 
+/**
+ * Hides the preview and cleans up resources
+ */
 function hidePreview() {
   debugLog('Hiding preview.');
   clearTimeout(hoverTimeout);
   currentImageUrl = null;
   lastHoveredUrl = null;
-  hideAllPreviews(); // Use the more thorough cleanup function
-}
-
-// Helper function to ensure all preview containers are removed
-function hideAllPreviews() {
-  // Find and remove ALL existing preview containers
-  const containers = document.querySelectorAll('#image-preview-container');
-  containers.forEach(container => container.remove());
   
-  // Reset the previewContainer variable
-  previewContainer = null;
+  // Use the PreviewContainer module to remove all containers
+  PreviewContainer.removeAll();
 }
 
 // Use event delegation for efficiency. Listen for mouseover on the whole document.
@@ -284,7 +377,7 @@ document.addEventListener('mouseover', (event) => {
     // Only process if we have a valid image URL
     if (imageUrl) {
       // Skip if it's the same URL we're already showing
-      if (imageUrl === lastHoveredUrl && previewContainer) {
+      if (imageUrl === lastHoveredUrl && PreviewContainer.element) {
         return;
       }
       
@@ -352,6 +445,14 @@ function testCache(url) {
     return null;
   }
 }
+
+// Initialize the extension
+debugLog('[Preview Extension] Script execution started');
+
+// Clean up any existing containers on script load
+document.addEventListener('DOMContentLoaded', () => {
+hideAllPreviews();
+});
 
 // Log that we've reached the end of the script
 debugLog('[Preview Extension] Script execution completed');
